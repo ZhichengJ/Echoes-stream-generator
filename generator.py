@@ -134,11 +134,13 @@ def addEventToPlaylist(stationName, data):
 def on_station_message(client, userdata, msg):
 
     topic = msg.topic.split('/')
+    smsg = str(msg.payload)
+
     if topic[2] == 'event':
         registerStation(topic[3])
-        registerStationEvent(topic[3], json.loads(str(msg.payload)))
+        registerStationEvent(topic[3], json.loads(smsg[smsg.find('{'):smsg.find('}')+1]))
         try:
-            generateNoiseResources(topic[3], json.loads(str(msg.payload))['peak_lower'])
+            generateNoiseResources(topic[3], json.loads(smsg)['peak_lower'])
         except Exception as e:
             logger.error(e)
             pass
@@ -189,18 +191,18 @@ def generateNoiseResources(stationName, noise_dbfs=12, force=False):
 
     folder_station = os.path.join(config['STREAMING']['m3u8_folder_path'], stationName)
 
-    event_noise_paths = SoundGenerator(noise_dbfs=12, seconds_split=(1 + int(
-        config['STREAMING']['time']) * NOISE_RESOURCES_LEN)).generate([0], [0], folder_station)
+    event_noise_paths = str(SoundGenerator(noise_dbfs=12, seconds_split=(1 + int(
+        config['STREAMING']['time']) * NOISE_RESOURCES_LEN)).generate([0], [0], folder_station))
+    
+    logger.info(event_noise_paths)
 
-    logger.info(event_noise_paths[0])
-
-    cmdLine = ['ffmpeg', '-i', event_noise_paths[0], '-f', 'segment', '-segment_time', '1',
+    cmdLine = ['ffmpeg', '-i', event_noise_paths, '-f', 'segment', '-segment_time', '1',
                '-c', 'copy', os.path.join(folder_station, NOISE_FILENAME_TEMPLATE)]
     ffmpeg = subprocess.Popen(cmdLine, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out, err = ffmpeg.communicate()
 
-    if os.path.isfile(event_noise_paths[0]):
-        os.remove(event_noise_paths[0])
+    if os.path.isfile(event_noise_paths):
+        os.remove(event_noise_paths)
 
 
 def generateStationResources(stationName):

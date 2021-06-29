@@ -2,14 +2,28 @@ from datetime import datetime
 from fnmatch import fnmatch
 import os
 # # pip install wavio --user
-import wavio
-
 # pip install PySoundFile --user
 # import soundfile as sf
-
+import pandas as pd
 import numpy as np
 
-# import matplotlib.pyplot as plt
+from pyo import *
+import time
+import matplotlib.pyplot as plt
+import librosa
+import librosa.display
+
+import subprocess
+import os
+import urllib.request
+import sys
+
+import configparser
+import json
+import requests
+
+import warnings
+warnings.filterwarnings("ignore")
 
 
 class SoundGenerator():
@@ -30,113 +44,114 @@ class SoundGenerator():
 
         self.file_ext = '.wav'
 
-    def __note(self, len, amp):
-        if amp < self.noise_dbfs:
-            amp = 0
-
-        t = np.linspace(0, len, len * self.rate)
-        data = np.sin(2 * np.pi * self.fre * t) * amp
-        return data
-        # return data.astype(np.int16)
-
     def __generateNoise(self, time, amp):
-        # noise_mu = self.noise_mu
         noise_sig = self.noise_sigma
 
         if amp < self.noise_dbfs:
             noise_sig = self.noise_dbfs * 0.2
 
         return np.random.uniform(-1 * noise_sig, 1 * noise_sig, int(self.rate * time))
-        # return np.random.uniform(-1,0, int(self.rate * time))
-        # return np.random.normal(noise_mu, noise_sig, int(self.rate * time))
 
-    def __generateSound(self, _t, _s_n):
 
-        # median = np.mean(_s_n)
-        _sound = np.array([])
-        for i, n in enumerate(_t):
-            if i == 0:
-                continue
-            else:
-                seconds = n - _t[i - 1]
+    def generate(self, t, s_n, destination_path):
+        if len(t) < 2:
+            return 'assets/default-noise.wav'
+        
+        t = [float(i) for i in t]
+        s_n = [float(i) for i in s_n]
+        # Archivos de config
+        config = configparser.ConfigParser()
+        config.read('configuracion.properties')
 
-                _note = np.array(self.__note(seconds, _s_n[i - 1])) + self.__generateNoise(seconds, _s_n[i - 1])
-                _sound = np.append(_sound, _note)
+        # Número de muestras de cada uno de los tipos de ecos
+        s = int(config.get('Seleccion', 's')) # Cortos
+        m = int(config.get('Seleccion', 'm')) # Duración intermedia
+        l = int(config.get('Seleccion', 'l')) # Largos
+        # Duración en milisegundos de los límites entre los distintos tipo de ecos:
+        # Ecos cortos: < t_l. t_l <= Ecos de duración intermedis < t_h. t_h <= Ecos largos
+        t_l = int(config.get('Seleccion', 't_l'))
+        t_h = int(config.get('Seleccion', 't_h'))
 
-        return _sound
+        # Parámetros para la generación del sonido.
+        #Parámetros para el volumen
+        Med_1 = float(config.get('Sonidos', 'Med_1'))  # Valor medio
+        Amp_1 = float(config.get('Sonidos', 'Amp_1'))  # Amplitud
+        #Parámetros para el tono
+        Med_2 = float(config.get('Sonidos', 'Med_2'))  # Valor medio
+        Amp_2 = float(config.get('Sonidos', 'Amp_2'))  # Amplitud
+        # Parámetros básicos del sonido
+        basic_freq = [261.6, 523.2, 1046.4] 
+        basic_mul = [.3, .3*.9, .3*.5] 
 
-    def __scale_to_sampwidth(self, data, sampwidth, vmin, vmax):
-        # Scale and translate the values to fit the range of the data type
-        # associated with the given sampwidth.
-        _sampwidth_dtypes = {1: np.uint8,
-                             2: np.int16,
-                             3: np.int32,
-                             4: np.int32}
-        _sampwidth_ranges = {1: (0, 256),
-                             2: (-2**15, 2**15),
-                             3: (-2**23, 2**23),
-                             4: (-2**31, 2**31)}
+        # Ruta del archivo
+        path_file = destination_path + str(datetime.now().strftime("%d_%m_%Y_%H_%M")) + ".wav"
+        # Conversión a Dataframes
+        tuples = list(zip(t, s_n))
 
-        data = data.clip(vmin, vmax)
+        data = pd.DataFrame(tuples,columns=['time', 'data'])
 
-        dt = _sampwidth_dtypes[sampwidth]
-        if vmax == vmin:
-            data = np.zeros(data.shape, dtype=dt)
+        var_1 = []  # La variable correspondiente a la curva de luz
+        var_2 = []  # La variable correspondiente al efecto Doppler en el espectrograma
+
+        # Extracción, a partir del fichero del espectrograma los valores de la
+        # curva de luz y el espectrograma relevantes.
+        for i in data['time'].unique():
+            var_1.append(data[data['time']==i]['data'].max())
+
+
+        for i in data['time'].unique():
+            l = len(data[data['time']==i]['data'])
+            var_2.append(data[data['time']==i]['data'].iloc[int(l*3/8):int(l*5/8)].sum()/len(data[data['time']==i]['data'].iloc[int(l*3/8):int(l*5/8)]))
+        # Normalización de los cambios de frecuencia y volumen según los 
+        # parámetros establecidos al principio del programa.
+        M_1 = max(var_1)
+        m_1 = min(var_1)
+        if M_1 != m_1:
+            a_1 = 2 / (M_1 - m_1)
+            b_1 = 1 - 2 * M_1 / (M_1 - m_1)
         else:
-            outmin, outmax = _sampwidth_ranges[sampwidth]
-            if outmin != vmin or outmax != vmax:
-                vmin = float(vmin)
-                vmax = float(vmax)
-                data = (float(outmax - outmin) * (data - vmin)
-                        / (vmax - vmin)).astype(np.int64) + outmin
-                data[data == outmax] = outmax - 1
-            data = data.astype(dt)
+            a_1 = 0
+            b_1 = 0
 
-        return data
+        M_2 = max(var_2)
+        m_2 = min(var_2)
+        if M_2 != m_2:
+            a_2 = 2 / (M_2 - m_2)
+            b_2 = 1 - 2 * M_2 / (M_2 - m_2)
+        else:
+            a_2 = 0
+            b_2 = 0
 
-    def __generateFile(self, path, sound):
-        # plt.title(os.path.basename(path))
-        # plt.plot(np.linspace(0, 1, len(sound)), sound)
-        # plt.grid(True)
-        # plt.xlabel('Seconds')
-        # plt.ylabel('Amplitude [dB]')
-        # plt.show()
 
-        wavio.write(path, sound, self.rate, sampwidth=1, scale=(self.min_scale, self.max_scale))
-        # sf.write(path, self.__scale_to_sampwidth(sound, 2, self.min_scale, self.max_scale), self.rate)
+        # Creación de las variables normalizadas que se utilizarán para generar
+        # los sonidos. La variable 1 se corresponde con la amplitud y la
+        # variable 2 con la frecuencia.
+        var_1_normalized = [Med_1 + Amp_1 * (a_1 * i + b_1) for i in var_1]
+        var_2_normalized = [Med_2 + Amp_2 * (a_2 * i + b_2) for i in var_2]
 
-    def generate(self, t, s_n, folder_path):
-        files = []
 
-        _from = 0
-        _to = 0
-        for i in range(len(t)):
-            _to = i
-            if t[_to] - t[_from] >= self.seconds_split:
-                # print(_from, _to, _to - _from, t[_to] - t[_from], t[_from], t[_to])
-                wav_path = os.path.join(folder_path, str(t[_from]) + "_" + str(t[_to]) + self.file_ext)
-                try:
-                    self.__generateFile(wav_path, self.__generateSound(np.array(t[_from:_to]), np.array(s_n[_from:_to])))
-                    files.append(wav_path)
-                except Exception as e:
-                    print(e)
-                    pass
+        inst_freq = [f * var_2_normalized[0] for f in basic_freq]
+        inst_mul = [m * var_1_normalized[0] for m in basic_mul]
+        # Inicio del servidor para generar el sonido.
+        s = Server(duplex=0)
+        s.boot()
+        s.start()
+        # Inicio del proceso de generación del sonido.
+        sin = Sine(freq=inst_freq, mul=inst_mul)
+        h1 = Harmonizer(sin).out()
+        brec = Record(h1, filename=path_file, chnls=2, fileformat=0, sampletype=0)
+        clean = Clean_objects(0, brec)
 
-                _from = _to
+        time.sleep(0.1)
 
-        while t[_to] - t[_from] < self.seconds_split:
-            # print(_to, t[_to], (self.seconds_split / self.samples_per_second))
-            t.append(t[_to] + (self.seconds_split / float(self.samples_per_second)))
-            s_n.append(0)
-            _to = len(t) - 1
+        for i in range(0,len(var_1_normalized)):
+            inst_freq = [f * var_2_normalized[i] for f in basic_freq]
+            inst_mul = [m * var_1_normalized[i] for m in basic_mul]
+            sin.set(attr="freq", value=inst_freq, port=0.05)
+            sin.set(attr="mul", value=inst_mul, port=0.05)    
+            time.sleep(0.1)
 
-        wav_path = os.path.join(folder_path, str(t[_from]) + "_" + str(t[_to]) + self.file_ext)
-        try:
-            sound = self.__generateSound(np.array(t[_from:_to]), np.array(s_n[_from:_to]))
-            self.__generateFile(wav_path, sound)
-            files.append(wav_path)
-        except Exception as e:
-            print(e)
-            pass
+        clean.start()
+        s.stop()
 
-        return files
+        return path_file

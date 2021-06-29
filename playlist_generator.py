@@ -31,7 +31,7 @@ class PlaylistGenerator(object):
         args = ("ffprobe", "-show_entries", "format=duration", "-i", self.playlist_entries[0])
         popen = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, err = popen.communicate()
-        match = re.search(r"[-+]?\d*\.\d+|\d+", output)
+        match = re.search(r"[-+]?\d*\.\d+|\d+", str(output))
         return float(match.group())
 
     def __incNoiseIndex(self):
